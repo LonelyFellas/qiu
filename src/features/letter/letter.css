@@ -97,7 +97,10 @@
   border-left: 1px solid rgba(195, 53, 43, 0.42);
   border-right: 1px solid rgba(195, 53, 43, 0.16);
 }
-.head {
+/* 必须限定成 .desk-card 的直接子元素：正文里的小标题行也叫 .head
+   （class="line head"），不限定的话它们会白拿下面这个 margin-bottom，
+   每个小标题把后面的字往下顶一截，稿纸格子就对不齐、页尾还会被裁掉。 */
+.desk-card > .head {
   width: 100%;
   margin: 0 auto clamp(12px, 2vw, 18px);
   color: var(--ink);

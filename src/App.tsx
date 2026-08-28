@@ -4,7 +4,7 @@ import NotFound from '@/routes/NotFound'
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
       <Routes>
         <Route path="/" element={<LetterPage />} />
         <Route path="*" element={<NotFound />} />

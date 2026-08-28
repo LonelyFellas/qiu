@@ -67,11 +67,8 @@ export default function LetterPage() {
     }, wait + 620)
   }
 
-  const foot = couponsOn
-    ? '附页三张，点一下就算兑现'
-    : typing
-      ? '正在书写⋯⋯点一下可跳过'
-      : '称呼和署名可以点开改成你们自己的'
+  // 写完到盖章之间不再提示，页脚留空
+  const foot = couponsOn ? '附页三张，点一下就算兑现' : typing ? '正在书写⋯⋯点一下可跳过' : ''
 
   return (
     <div className="desk">
@@ -126,7 +123,7 @@ export default function LetterPage() {
       <Coupons visible={couponsOn} ref={couponsRef} />
 
       <div className="footer">
-        <span>{foot}</span>
+        {foot && <span>{foot}</span>}
         {couponsOn && (
           <button className="link" onClick={() => location.reload()}>
             重写一份

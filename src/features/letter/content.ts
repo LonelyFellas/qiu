@@ -24,9 +24,10 @@ export function buildDoc(now: Date): Par[] {
     },
     { blank: true },
     { cls: 'head', segs: [T('三、整改措施')] },
-    { measure: '你喊不舒服，立刻闭嘴烧水' },
-    { measure: '那几天的道理，一律我认输' },
-    { measure: '想争对错前，先想你的肚子' },
+    // 每条正文限 11 字以内：首行缩进 2 格 + 方框与全角空格 2 格，一共 15 格
+    { measure: '你说疼，立刻闭嘴烧水' },
+    { measure: '那几天的理，一律归你' },
+    { measure: '想争对错，先想你肚子' },
     { blank: true },
     { indent: 2, segs: [T('以上句句属实，请你过目，也请你原谅。')] },
     { blank: true },
