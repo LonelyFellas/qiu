@@ -5,7 +5,7 @@ export function buildDoc(now: Date): Par[] {
   return [
     { segs: [T('尊敬的'), E('to', '秋宝宝'), T('台鉴：')] },
     { blank: true },
-    { indent: 2, segs: [T('昨天的事，我想认真地跟你说几句话。')] },
+    { indent: 2, segs: [T('今天的事，我想认真地跟你说几句话。')] },
     { blank: true },
     { cls: 'head', segs: [T('一、事实经过')] },
     {
