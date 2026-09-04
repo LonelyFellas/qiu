@@ -55,8 +55,11 @@ export class WallpaperScene {
   private seededAt = 0
   private floorLayer = document.createElement('canvas')
   private floorLayerTop = 0
-  private waterGradient: CanvasGradient | null = null
-  private glassGradient: CanvasGradient | null = null
+  private fishLayer = document.createElement('canvas')
+  private fishLayerDpr = 1
+  private fishLayerWidth = 340
+  private fishLayerHeight = 260
+  private cachedFishTail = Number.NaN
 
   private get floorY() {
     return this.h - 26 * this.zoom
@@ -87,18 +90,12 @@ export class WallpaperScene {
     this.canvas.width = Math.round(this.w * dpr)
     this.canvas.height = Math.round(this.h * dpr)
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    this.fishLayerDpr = dpr
+    this.fishLayer.width = Math.round(this.fishLayerWidth * dpr)
+    this.fishLayer.height = Math.round(this.fishLayerHeight * dpr)
+    this.cachedFishTail = Number.NaN
     this.zoom = Math.max(1, Math.min(Math.min(this.w / 760, this.h / 560), 2.4))
     if (!this.grass.length || Math.abs(this.w - this.seededAt) > 160) this.reseed()
-    this.waterGradient = this.ctx.createLinearGradient(0, 0, 0, this.h)
-    this.waterGradient.addColorStop(0, 'hsl(187 62% 55%)')
-    this.waterGradient.addColorStop(0.38, 'hsl(193 58% 42%)')
-    this.waterGradient.addColorStop(1, 'hsl(205 64% 22%)')
-    this.glassGradient = this.ctx.createRadialGradient(
-      this.w / 2, this.h / 2, Math.min(this.w, this.h) * 0.3,
-      this.w / 2, this.h / 2, Math.max(this.w, this.h) * 0.72,
-    )
-    this.glassGradient.addColorStop(0, 'rgba(0,0,0,0)')
-    this.glassGradient.addColorStop(1, 'rgba(4,26,40,0.42)')
     this.cacheFloor(dpr)
   }
 
@@ -186,7 +183,7 @@ export class WallpaperScene {
 
   private draw() {
     const { ctx, w, h } = this
-    this.drawWater()
+    ctx.clearRect(0, 0, w, h)
     this.drawSurface()
     this.drawLightShafts()
     this.drawCaustics()
@@ -194,14 +191,6 @@ export class WallpaperScene {
     this.drawGrass()
     this.drawFish()
     this.drawBubbles()
-    this.drawGlass()
-  }
-
-  private drawWater() {
-    const { ctx, w, h } = this
-    if (!this.waterGradient) return
-    ctx.fillStyle = this.waterGradient
-    ctx.fillRect(0, 0, w, h)
   }
 
   private cacheFloor(dpr: number) {
@@ -351,24 +340,40 @@ export class WallpaperScene {
     }
   }
 
-  private drawGlass() {
-    const { ctx, w, h } = this
-    if (!this.glassGradient) return
-    ctx.fillStyle = this.glassGradient
-    ctx.fillRect(0, 0, w, h)
-    ctx.fillStyle = 'rgba(255,255,255,0.05)'
-    ctx.beginPath()
-    ctx.moveTo(0, 0)
-    ctx.lineTo(w * 0.42, 0)
-    ctx.lineTo(0, h * 0.5)
-    ctx.closePath()
-    ctx.fill()
-  }
-
   private drawFish() {
-    if (!this.hasFish) return
+    const margin = Math.hypot(this.fishLayerWidth, this.fishLayerHeight) / 2
+    if (!this.hasFish
+      || this.fish.x <= -margin
+      || this.fish.x >= this.w + margin
+      || this.fish.y <= -margin
+      || this.fish.y >= this.h + margin) return
     const { ctx } = this
     const fish = this.fish
+    if (fish.tail !== this.cachedFishTail) this.renderFishLayer()
+
+    ctx.save()
+    ctx.translate(fish.x, fish.y)
+    ctx.rotate(fish.angle)
+    if (Math.abs(wrapAngle(fish.angle)) > Math.PI / 2) ctx.scale(1, -1)
+    ctx.drawImage(
+      this.fishLayer,
+      -this.fishLayerWidth / 2,
+      -this.fishLayerHeight / 2,
+      this.fishLayerWidth,
+      this.fishLayerHeight,
+    )
+    ctx.restore()
+  }
+
+  private renderFishLayer() {
+    const ctx = this.fishLayer.getContext('2d')
+    if (!ctx) return
+    const fish = this.fish
+    this.cachedFishTail = fish.tail
+    ctx.setTransform(this.fishLayerDpr, 0, 0, this.fishLayerDpr, 0, 0)
+    ctx.clearRect(0, 0, this.fishLayerWidth, this.fishLayerHeight)
+    ctx.save()
+    ctx.translate(this.fishLayerWidth / 2, this.fishLayerHeight / 2)
     const length = 92 * this.fishZoom
     const height = 23 * this.fishZoom
     const wave = (u: number) => Math.sin(fish.tail - u * 2.7) * height * 0.34 * u * u
@@ -378,11 +383,6 @@ export class WallpaperScene {
         : height * (1 - 0.84 * ((u - 0.28) / 0.72) ** 1.35)
     const px = (u: number) => length * (0.52 - u)
     const py = (u: number) => wave(u)
-
-    ctx.save()
-    ctx.translate(fish.x, fish.y)
-    ctx.rotate(fish.angle)
-    if (Math.abs(wrapAngle(fish.angle)) > Math.PI / 2) ctx.scale(1, -1)
 
     const tailX = px(1)
     const tailY = py(1)

@@ -27,7 +27,34 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #0b2231;
+  background: linear-gradient(
+    to bottom,
+    hsl(187 62% 55%) 0%,
+    hsl(193 58% 42%) 38%,
+    hsl(205 64% 22%) 100%
+  );
+}
+
+.wallpaper::before,
+.wallpaper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.wallpaper::before {
+  background: radial-gradient(
+    circle at center,
+    rgba(0, 0, 0, 0) min(30vw, 30vh),
+    rgba(4, 26, 40, 0.42) max(72vw, 72vh)
+  );
+}
+
+.wallpaper::after {
+  background: rgba(255, 255, 255, 0.05);
+  clip-path: polygon(0 0, 42% 0, 0 50%);
 }
 
 .wallpaper canvas {
