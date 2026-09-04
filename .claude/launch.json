@@ -2,10 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "qiu-dev",
+      "name": "tank",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev"],
-      "port": 5173
+      "runtimeArgs": [
+        "dev"
+      ],
+      "port": 1421
     }
   ]
 }

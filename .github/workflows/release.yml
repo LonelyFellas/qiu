@@ -1,0 +1,62 @@
+# 打包给她。
+#
+# 用法：把版本号推成一个 tag，两个平台的安装包会自动构建出来，
+# 落在仓库的 Releases 里（草稿状态，确认没问题再点发布）：
+#
+#     git tag v1.0.0 && git push origin v1.0.0
+#
+# Windows 拿 .exe / .msi，macOS 拿 .dmg。
+# macOS 的包没有签名，她第一次打开要右键 →「打开」。
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin' # Intel 和 Apple 芯片通吃
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: '小鱼缸 __VERSION__'
+          releaseBody: '下载对应你系统的那个装上就行。'
+          releaseDraft: true
+          args: ${{ matrix.args }}
