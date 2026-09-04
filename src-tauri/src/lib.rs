@@ -44,6 +44,12 @@ struct FishFrame {
     tail: f64,
 }
 
+#[derive(Clone, Serialize)]
+struct PointerFrame {
+    x: f64,
+    y: f64,
+}
+
 struct PointerTarget {
     x: f64,
     y: f64,
@@ -279,10 +285,16 @@ fn enter_wallpaper(
 }
 
 #[tauri::command]
-fn set_world_pointer(state: tauri::State<'_, WallpaperState>, x: f64, y: f64) {
+fn set_world_pointer(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WallpaperState>,
+    x: f64,
+    y: f64,
+) {
     if let Ok(mut fish) = state.fish.lock() {
         fish.set_pointer(x, y);
     }
+    let _ = app.emit("world-pointer", PointerFrame { x, y });
 }
 
 fn start_fish_loop(app: tauri::AppHandle) {
@@ -380,7 +392,7 @@ pub fn run() {
                 .focused(false)
                 .focusable(false)
                 .decorations(false)
-                .transparent(true)
+                .transparent(false)
                 .resizable(false)
                 .build()?;
             }
@@ -505,8 +517,12 @@ mod tests {
     }
 
     #[test]
-    fn monitor_coordinates_use_one_logical_unit() {
+    fn monitor_and_cursor_coordinates_share_appkit_logical_units() {
+        // Tao turns AppKit's global logical coordinates into physical values with
+        // the owning monitor scale, while cursor positions use the primary scale.
         assert_eq!(logical_coordinate(-3444.0, 2.0), -1722.0);
         assert_eq!(logical_coordinate(5120.0, 2.0), 2560.0);
+        assert_eq!(logical_coordinate(-1722.0, 1.0), -1722.0);
+        assert_eq!(logical_coordinate(2560.0, 1.0), 2560.0);
     }
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import { enterWallpaper, setWorldPointer, trackCursor } from './logic/desktop'
 import { WallpaperScene, type FishFrame } from './tank/WallpaperScene'
@@ -18,6 +19,11 @@ const BUBBLE_COOLDOWN_MS = 15_000
 
 const distance = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y)
+
+interface PointerFrame {
+  x: number
+  y: number
+}
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -73,6 +79,8 @@ export default function App() {
 
     let raf = 0
     let last = performance.now()
+    let lastBubbleVisibility = ''
+    let lastBubbleTransform = ''
     const loop = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05)
       last = now
@@ -83,10 +91,18 @@ export default function App() {
         const { x, y, r, visible } = scene.fishPos
         const bubbleX = Math.max(118, Math.min(canvas.clientWidth - 118, x))
         const bubbleY = Math.max(58, y - r - 12)
-        bubble.style.visibility = !visible || x < 118 || x > canvas.clientWidth - 118
+        const visibility = !visible || x < 118 || x > canvas.clientWidth - 118
           ? 'hidden'
           : 'visible'
-        bubble.style.transform = `translate(${bubbleX}px, ${bubbleY}px) translate(-50%, -100%)`
+        const transform = `translate(${bubbleX}px, ${bubbleY}px) translate(-50%, -100%)`
+        if (visibility !== lastBubbleVisibility) {
+          bubble.style.visibility = visibility
+          lastBubbleVisibility = visibility
+        }
+        if (transform !== lastBubbleTransform) {
+          bubble.style.transform = transform
+          lastBubbleTransform = transform
+        }
       }
       raf = requestAnimationFrame(loop)
     }
@@ -104,30 +120,37 @@ export default function App() {
     let alive = true
     let stopTracking = () => {}
     let stopListening = () => {}
+    let stopPointerListening = () => {}
     void (async () => {
       const screen = await enterWallpaper()
       if (!alive || !screen) return
       sceneRef.current?.setOrigin(screen.x, screen.y)
-      stopListening = await listen<FishFrame>('fish-frame', (event) => {
-        sceneRef.current?.setFishFrame(event.payload)
-      })
+      ;[stopListening, stopPointerListening] = await Promise.all([
+        listen<FishFrame>('fish-frame', (event) => {
+          sceneRef.current?.setFishFrame(event.payload)
+        }),
+        listen<PointerFrame>('world-pointer', (event) => {
+          const x = event.payload.x - screen.x
+          const y = event.payload.y - screen.y
+          if (x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight)
+            followPointer(x, y)
+          else
+            clearPointer()
+        }),
+      ])
       if (!alive) {
         stopListening()
+        stopPointerListening()
         return
       }
-      stopTracking = trackCursor(
-        screen,
-        (x, y) => {
-          setWorldPointer(screen.x + x, screen.y + y)
-          followPointer(x, y)
-        },
-        clearPointer,
-      )
+      if (getCurrentWebviewWindow().label === 'main')
+        stopTracking = trackCursor(screen, setWorldPointer)
     })()
     return () => {
       alive = false
       stopTracking()
       stopListening()
+      stopPointerListening()
     }
   }, [])
 

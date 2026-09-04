@@ -31,7 +31,6 @@ export function setWorldPointer(x: number, y: number): void {
 export function trackCursor(
   screen: ScreenConfig,
   onMove: (x: number, y: number) => void,
-  onLeave: () => void,
 ): () => void {
   if (!inTauri) return () => {}
   let last = { x: Number.NaN, y: Number.NaN }
@@ -44,16 +43,11 @@ export function trackCursor(
     try {
       const position = await cursorPosition()
       // macOS 的全局光标坐标由 Tao 按主屏缩放输出；统一还原为桌面逻辑坐标。
-      const x = position.x / screen.primaryScaleFactor - screen.x
-      const y = position.y / screen.primaryScaleFactor - screen.y
-      if (x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight) {
-        if (!Number.isFinite(last.x) || Math.hypot(x - last.x, y - last.y) >= 0.75) {
-          last = { x, y }
-          onMove(x, y)
-        }
-      } else if (Number.isFinite(last.x)) {
-        last = { x: Number.NaN, y: Number.NaN }
-        onLeave()
+      const x = position.x / screen.primaryScaleFactor
+      const y = position.y / screen.primaryScaleFactor
+      if (!Number.isFinite(last.x) || Math.hypot(x - last.x, y - last.y) >= 0.75) {
+        last = { x, y }
+        onMove(x, y)
       }
     } catch {
       // 下一次轮询继续尝试，不让光标读取失败影响壁纸动画。

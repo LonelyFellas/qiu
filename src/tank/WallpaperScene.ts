@@ -53,6 +53,10 @@ export class WallpaperScene {
   private stones: { x: number; r: number; hue: number }[] = []
   private sand: { x: number; y: number; r: number; a: number; dark: boolean }[] = []
   private seededAt = 0
+  private floorLayer = document.createElement('canvas')
+  private floorLayerTop = 0
+  private waterGradient: CanvasGradient | null = null
+  private glassGradient: CanvasGradient | null = null
 
   private get floorY() {
     return this.h - 26 * this.zoom
@@ -85,6 +89,17 @@ export class WallpaperScene {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     this.zoom = Math.max(1, Math.min(Math.min(this.w / 760, this.h / 560), 2.4))
     if (!this.grass.length || Math.abs(this.w - this.seededAt) > 160) this.reseed()
+    this.waterGradient = this.ctx.createLinearGradient(0, 0, 0, this.h)
+    this.waterGradient.addColorStop(0, 'hsl(187 62% 55%)')
+    this.waterGradient.addColorStop(0.38, 'hsl(193 58% 42%)')
+    this.waterGradient.addColorStop(1, 'hsl(205 64% 22%)')
+    this.glassGradient = this.ctx.createRadialGradient(
+      this.w / 2, this.h / 2, Math.min(this.w, this.h) * 0.3,
+      this.w / 2, this.h / 2, Math.max(this.w, this.h) * 0.72,
+    )
+    this.glassGradient.addColorStop(0, 'rgba(0,0,0,0)')
+    this.glassGradient.addColorStop(1, 'rgba(4,26,40,0.42)')
+    this.cacheFloor(dpr)
   }
 
   setOrigin(x: number, y: number) {
@@ -171,12 +186,11 @@ export class WallpaperScene {
 
   private draw() {
     const { ctx, w, h } = this
-    ctx.clearRect(0, 0, w, h)
     this.drawWater()
     this.drawSurface()
     this.drawLightShafts()
     this.drawCaustics()
-    this.drawFloor()
+    ctx.drawImage(this.floorLayer, 0, this.floorLayerTop, w, h - this.floorLayerTop)
     this.drawGrass()
     this.drawFish()
     this.drawBubbles()
@@ -185,12 +199,20 @@ export class WallpaperScene {
 
   private drawWater() {
     const { ctx, w, h } = this
-    const gradient = ctx.createLinearGradient(0, 0, 0, h)
-    gradient.addColorStop(0, 'hsl(187 62% 55%)')
-    gradient.addColorStop(0.38, 'hsl(193 58% 42%)')
-    gradient.addColorStop(1, 'hsl(205 64% 22%)')
-    ctx.fillStyle = gradient
+    if (!this.waterGradient) return
+    ctx.fillStyle = this.waterGradient
     ctx.fillRect(0, 0, w, h)
+  }
+
+  private cacheFloor(dpr: number) {
+    this.floorLayerTop = Math.max(0, Math.floor(this.floorY - 18 * this.zoom))
+    const height = this.h - this.floorLayerTop
+    this.floorLayer.width = Math.round(this.w * dpr)
+    this.floorLayer.height = Math.max(1, Math.round(height * dpr))
+    const ctx = this.floorLayer.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, -this.floorLayerTop * dpr)
+    this.drawFloor(ctx)
   }
 
   private drawSurface() {
@@ -252,8 +274,8 @@ export class WallpaperScene {
     ctx.restore()
   }
 
-  private drawFloor() {
-    const { ctx, w, h } = this
+  private drawFloor(ctx: CanvasRenderingContext2D) {
+    const { w, h } = this
     const base = this.floorY
     const gradient = ctx.createLinearGradient(0, base - 18 * this.zoom, 0, h)
     gradient.addColorStop(0, 'hsl(40 42% 70%)')
@@ -331,13 +353,8 @@ export class WallpaperScene {
 
   private drawGlass() {
     const { ctx, w, h } = this
-    const gradient = ctx.createRadialGradient(
-      w / 2, h / 2, Math.min(w, h) * 0.3,
-      w / 2, h / 2, Math.max(w, h) * 0.72,
-    )
-    gradient.addColorStop(0, 'rgba(0,0,0,0)')
-    gradient.addColorStop(1, 'rgba(4,26,40,0.42)')
-    ctx.fillStyle = gradient
+    if (!this.glassGradient) return
+    ctx.fillStyle = this.glassGradient
     ctx.fillRect(0, 0, w, h)
     ctx.fillStyle = 'rgba(255,255,255,0.05)'
     ctx.beginPath()
