@@ -1,90 +1,209 @@
-use semver::Version;
-use serde::Deserialize;
+use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
-use tauri_plugin_opener::OpenerExt;
-
-const GITEE_RELEASE_API: &str = "https://gitee.com/api/v5/repos/yu-shengming/qiu/releases/latest";
-const GITHUB_RELEASE_API: &str = "https://api.github.com/repos/LonelyFellas/qiu/releases/latest";
-
-#[derive(Deserialize)]
-struct ReleaseResponse {
-    tag_name: String,
-    html_url: Option<String>,
-}
-
-enum UpdateCheck {
-    Available { version: String, url: String },
-    Current,
-    NoRelease,
-}
+use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Default)]
 struct UpdateMenuState {
     checking: bool,
-    release_url: Option<String>,
 }
 
-async fn fetch_release(
-    client: &reqwest::Client,
-    api: &str,
-    fallback_url: impl FnOnce(&str) -> String,
-) -> Result<Option<(String, String)>, String> {
-    let response = client
-        .get(api)
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "LittleFishTank")
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenConfig {
+    label: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    scale_factor: f64,
+    primary_scale_factor: f64,
+}
 
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+#[derive(Clone)]
+struct ScreenTarget {
+    config: ScreenConfig,
+}
+
+struct WallpaperState {
+    screens: Vec<ScreenTarget>,
+    fish: Mutex<FishWorld>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FishFrame {
+    x: f64,
+    y: f64,
+    angle: f64,
+    tail: f64,
+}
+
+struct PointerTarget {
+    x: f64,
+    y: f64,
+    updated_at: Instant,
+}
+
+struct FishWorld {
+    x: f64,
+    y: f64,
+    target_x: f64,
+    target_y: f64,
+    angle: f64,
+    speed: f64,
+    tail: f64,
+    orbit_direction: f64,
+    pointer: Option<PointerTarget>,
+    screens: Vec<ScreenConfig>,
+    random_state: u64,
+}
+
+impl FishWorld {
+    fn new(screens: Vec<ScreenConfig>) -> Self {
+        let first = &screens[0];
+        let x = first.x + first.width * 0.5;
+        let y = first.y + first.height * 0.48;
+        let mut world = Self {
+            x,
+            y,
+            target_x: x,
+            target_y: y,
+            angle: 0.0,
+            speed: 0.0,
+            tail: 0.0,
+            orbit_direction: 1.0,
+            pointer: None,
+            screens,
+            random_state: 0x9e37_79b9_7f4a_7c15,
+        };
+        world.pick_target();
+        world
     }
-    let release = response
-        .error_for_status()
-        .map_err(|error| error.to_string())?
-        .json::<ReleaseResponse>()
-        .await
-        .map_err(|error| error.to_string())?;
-    let url = release
-        .html_url
-        .unwrap_or_else(|| fallback_url(&release.tag_name));
-    Ok(Some((release.tag_name, url)))
-}
 
-async fn check_latest_release(current: &Version) -> Result<UpdateCheck, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let release = match fetch_release(&client, GITEE_RELEASE_API, |tag| {
-        format!("https://gitee.com/yu-shengming/qiu/releases/tag/{tag}")
-    })
-    .await
-    {
-        Ok(Some(release)) => Some(release),
-        Ok(None) | Err(_) => {
-            fetch_release(&client, GITHUB_RELEASE_API, |_| {
-                "https://github.com/LonelyFellas/qiu/releases/latest".into()
-            })
-            .await?
+    fn set_pointer(&mut self, x: f64, y: f64) {
+        self.pointer = Some(PointerTarget {
+            x,
+            y,
+            updated_at: Instant::now(),
+        });
+    }
+
+    fn tick(&mut self, dt: f64) -> FishFrame {
+        let pointer = self
+            .pointer
+            .as_ref()
+            .filter(|pointer| pointer.updated_at.elapsed() < Duration::from_millis(2600));
+        let curious = pointer.is_some();
+        if let Some(pointer) = pointer {
+            let bearing = (self.y - pointer.y).atan2(self.x - pointer.x);
+            let ahead = bearing + self.orbit_direction * 0.8;
+            self.target_x = pointer.x + ahead.cos() * 88.0;
+            self.target_y = pointer.y + ahead.sin() * 55.0;
+        } else if (self.target_x - self.x).hypot(self.target_y - self.y) < 28.0 {
+            self.pick_target();
         }
-    };
-    let Some((tag, url)) = release else {
-        return Ok(UpdateCheck::NoRelease);
-    };
-    let latest = Version::parse(tag.trim_start_matches('v')).map_err(|error| error.to_string())?;
 
-    if latest > *current {
-        Ok(UpdateCheck::Available { version: tag, url })
-    } else {
-        Ok(UpdateCheck::Current)
+        let dx = self.target_x - self.x;
+        let dy = self.target_y - self.y;
+        let desired_speed = if curious { 150.0 } else { 105.0 };
+        self.speed += (desired_speed - self.speed) * (dt * 2.2).min(1.0);
+        let desired_angle = dy.atan2(dx);
+        self.angle += wrap_angle(desired_angle - self.angle) * (dt * 4.0).min(1.0);
+        self.x += self.angle.cos() * self.speed * dt;
+        self.y += self.angle.sin() * self.speed * dt;
+        self.tail += dt * (2.6 + self.speed / 40.0 * 5.0);
+
+        FishFrame {
+            x: self.x,
+            y: self.y,
+            angle: self.angle,
+            tail: self.tail,
+        }
     }
+
+    fn pick_target(&mut self) {
+        let index = (self.random() * self.screens.len() as f64) as usize;
+        let screen = self.screens[index.min(self.screens.len() - 1)].clone();
+        let margin_x = screen.width.min(180.0) * 0.45;
+        let margin_y = screen.height.min(180.0) * 0.45;
+        self.target_x = screen.x + margin_x + self.random() * (screen.width - margin_x * 2.0);
+        self.target_y = screen.y + margin_y + self.random() * (screen.height - margin_y * 2.0);
+        if self.random() < 0.08 {
+            self.orbit_direction *= -1.0;
+        }
+    }
+
+    fn random(&mut self) -> f64 {
+        self.random_state = self
+            .random_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((self.random_state >> 11) as f64) / ((1_u64 << 53) as f64)
+    }
+}
+
+fn wrap_angle(mut angle: f64) -> f64 {
+    while angle > std::f64::consts::PI {
+        angle -= std::f64::consts::TAU;
+    }
+    while angle <= -std::f64::consts::PI {
+        angle += std::f64::consts::TAU;
+    }
+    angle
+}
+
+fn logical_coordinate(value: f64, scale_factor: f64) -> f64 {
+    value / scale_factor
+}
+
+async fn install_available_update(app: &tauri::AppHandle) -> Result<bool, String> {
+    let Some(update) = app
+        .updater()
+        .map_err(|error| error.to_string())?
+        .check()
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| error.to_string())?;
+    app.restart();
+}
+
+#[cfg(not(debug_assertions))]
+fn start_auto_update(app: tauri::AppHandle, state: Arc<Mutex<UpdateMenuState>>) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(15));
+        let should_check = match state.lock() {
+            Ok(mut state) if !state.checking => {
+                state.checking = true;
+                true
+            }
+            _ => false,
+        };
+        if !should_check {
+            return;
+        }
+        tauri::async_runtime::spawn(async move {
+            let result = install_available_update(&app).await;
+            if let Ok(mut state) = state.lock() {
+                state.checking = false;
+            }
+            if let Err(error) = result {
+                eprintln!("auto-update=failed: {error}");
+            }
+        });
+    });
 }
 
 /// macOS 的真正桌面层。桌面图标在它上面，因此壁纸不会挡住 Finder。
@@ -116,23 +235,33 @@ fn apply_wallpaper_level(window: &tauri::WebviewWindow) -> Result<String, String
 const DESKTOP_LEVEL: isize = -2147483623;
 
 #[tauri::command]
-fn enter_wallpaper(window: tauri::WebviewWindow) -> Result<String, String> {
-    // 隐藏窗口没有可靠的“当前显示器”，登录启动时始终铺到系统主显示器。
-    let monitor = window
-        .primary_monitor()
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "current monitor not found".to_string())?;
-    let position = *monitor.position();
-    let size = *monitor.size();
+fn enter_wallpaper(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, WallpaperState>,
+) -> Result<ScreenConfig, String> {
+    let target = state
+        .screens
+        .iter()
+        .find(|screen| screen.config.label == window.label())
+        .cloned()
+        .ok_or_else(|| format!("screen config not found for {}", window.label()))?;
 
     #[cfg(not(target_os = "macos"))]
     window
         .set_always_on_bottom(true)
         .map_err(|error| error.to_string())?;
     window
-        .set_position(position)
+        .set_position(tauri::LogicalPosition::new(
+            target.config.x,
+            target.config.y,
+        ))
         .map_err(|error| error.to_string())?;
-    window.set_size(size).map_err(|error| error.to_string())?;
+    window
+        .set_size(tauri::LogicalSize::new(
+            target.config.width,
+            target.config.height,
+        ))
+        .map_err(|error| error.to_string())?;
     window
         .set_resizable(false)
         .map_err(|error| error.to_string())?;
@@ -145,27 +274,117 @@ fn enter_wallpaper(window: tauri::WebviewWindow) -> Result<String, String> {
     window.show().map_err(|error| error.to_string())?;
 
     // show() 会让窗口重新参与 macOS 排序；真正的桌面层必须是最后一个窗口操作。
-    let level = apply_wallpaper_level(&window)?;
+    apply_wallpaper_level(&window)?;
+    Ok(target.config)
+}
 
-    let actual = window.inner_size().map_err(|error| error.to_string())?;
-    Ok(format!(
-        "monitor={}x{}, window={}x{}, {level}",
-        size.width, size.height, actual.width, actual.height,
-    ))
+#[tauri::command]
+fn set_world_pointer(state: tauri::State<'_, WallpaperState>, x: f64, y: f64) {
+    if let Ok(mut fish) = state.fish.lock() {
+        fish.set_pointer(x, y);
+    }
+}
+
+fn start_fish_loop(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut last = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(33));
+            let now = Instant::now();
+            let dt = now.duration_since(last).as_secs_f64().min(0.08);
+            last = now;
+            let frame = {
+                let state = app.state::<WallpaperState>();
+                let frame = match state.fish.lock() {
+                    Ok(mut fish) => fish.tick(dt),
+                    Err(_) => break,
+                };
+                frame
+            };
+            if app.emit("fish-frame", frame).is_err() {
+                break;
+            }
+        }
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .invoke_handler(tauri::generate_handler![enter_wallpaper])
+        .invoke_handler(tauri::generate_handler![enter_wallpaper, set_world_pointer])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            let main = app
+                .get_webview_window("main")
+                .ok_or_else(|| "main window not found".to_string())?;
+            let primary = main
+                .primary_monitor()?
+                .ok_or_else(|| "primary monitor not found".to_string())?;
+            let primary_scale_factor = primary.scale_factor();
+            let mut monitors = main.available_monitors()?;
+            monitors.sort_by_key(|monitor| {
+                if monitor.position() == primary.position() && monitor.size() == primary.size() {
+                    0
+                } else {
+                    1
+                }
+            });
+            let screens = monitors
+                .iter()
+                .enumerate()
+                .map(|(index, monitor)| {
+                    let scale = monitor.scale_factor();
+                    let position = *monitor.position();
+                    let size = *monitor.size();
+                    ScreenTarget {
+                        config: ScreenConfig {
+                            label: if index == 0 {
+                                "main".into()
+                            } else {
+                                format!("wallpaper-{index}")
+                            },
+                            x: logical_coordinate(position.x as f64, scale),
+                            y: logical_coordinate(position.y as f64, scale),
+                            width: logical_coordinate(size.width as f64, scale),
+                            height: logical_coordinate(size.height as f64, scale),
+                            scale_factor: scale,
+                            primary_scale_factor,
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
+            if screens.is_empty() {
+                return Err("no monitors found".into());
+            }
+            let fish_screens = screens.iter().map(|screen| screen.config.clone()).collect();
+            app.manage(WallpaperState {
+                screens: screens.clone(),
+                fish: Mutex::new(FishWorld::new(fish_screens)),
+            });
+
+            for screen in screens.iter().skip(1) {
+                WebviewWindowBuilder::new(
+                    app,
+                    &screen.config.label,
+                    WebviewUrl::App("index.html".into()),
+                )
+                .title("小鱼缸壁纸")
+                .visible(false)
+                .focused(false)
+                .focusable(false)
+                .decorations(false)
+                .transparent(true)
+                .resizable(false)
+                .build()?;
+            }
+            start_fish_loop(app.handle().clone());
 
             #[cfg(desktop)]
             {
@@ -178,11 +397,23 @@ pub fn run() {
             }
 
             // 壁纸没有普通窗口，只保留更新检查和一个可靠的退出入口。
-            let update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
+            let update = MenuItem::with_id(
+                app,
+                "check-update",
+                if cfg!(debug_assertions) {
+                    "开发模式不检查更新"
+                } else {
+                    "检查更新"
+                },
+                !cfg!(debug_assertions),
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "退出壁纸", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&update, &quit])?;
             let update_item = update.clone();
             let update_state = Arc::new(Mutex::new(UpdateMenuState::default()));
+            #[cfg(not(debug_assertions))]
+            let auto_update_state = Arc::clone(&update_state);
             TrayIconBuilder::with_id("main")
                 .icon(tauri::include_image!("icons/32x32.png"))
                 .tooltip("小鱼缸壁纸")
@@ -194,10 +425,6 @@ pub fn run() {
                             Ok(state) => state,
                             Err(_) => return,
                         };
-                        if let Some(url) = state.release_url.clone() {
-                            let _ = app.opener().open_url(url, None::<&str>);
-                            return;
-                        }
                         if state.checking {
                             return;
                         }
@@ -211,20 +438,14 @@ pub fn run() {
                         let state = Arc::clone(&update_state);
                         let current = app.package_info().version.clone();
                         tauri::async_runtime::spawn(async move {
-                            let result = check_latest_release(&current).await;
+                            let result = install_available_update(&app).await;
                             if let Ok(mut menu_state) = state.lock() {
                                 menu_state.checking = false;
                                 match result {
-                                    Ok(UpdateCheck::Available { version, url }) => {
-                                        menu_state.release_url = Some(url);
-                                        let _ = item.set_text(format!("发现 {version}，点击下载"));
-                                    }
-                                    Ok(UpdateCheck::Current) => {
+                                    Ok(false) => {
                                         let _ = item.set_text(format!("已是最新 v{current}"));
                                     }
-                                    Ok(UpdateCheck::NoRelease) => {
-                                        let _ = item.set_text("暂无发布版本，点击重试");
-                                    }
+                                    Ok(true) => unreachable!("安装更新后应用会立即重启"),
                                     Err(_) => {
                                         let _ = item.set_text("检查失败，点击重试");
                                     }
@@ -237,6 +458,8 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+            #[cfg(not(debug_assertions))]
+            start_auto_update(app.handle().clone(), auto_update_state);
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -247,10 +470,43 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    fn screen(label: &str, x: f64) -> ScreenConfig {
+        ScreenConfig {
+            label: label.into(),
+            x,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+            scale_factor: 1.0,
+            primary_scale_factor: 2.0,
+        }
+    }
+
     #[test]
-    fn release_tags_compare_as_semver() {
-        let current = Version::parse("0.1.0").unwrap();
-        assert!(Version::parse("0.2.0").unwrap() > current);
-        assert!(Version::parse("0.1.0").unwrap() <= current);
+    fn shared_fish_world_can_cross_a_screen_boundary() {
+        let mut world = FishWorld::new(vec![screen("main", 0.0), screen("wallpaper-1", 800.0)]);
+        world.x = 400.0;
+        world.y = 300.0;
+        world.target_x = 1_200.0;
+        world.target_y = 300.0;
+        world.angle = 0.0;
+        world.speed = 105.0;
+
+        let mut crossed = false;
+        for _ in 0..150 {
+            let frame = world.tick(0.033);
+            if frame.x > 800.0 {
+                crossed = true;
+                break;
+            }
+        }
+
+        assert!(crossed, "fish should enter the neighboring screen");
+    }
+
+    #[test]
+    fn monitor_coordinates_use_one_logical_unit() {
+        assert_eq!(logical_coordinate(-3444.0, 2.0), -1722.0);
+        assert_eq!(logical_coordinate(5120.0, 2.0), 2560.0);
     }
 }

@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -36,5 +37,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc2RDFFNjVFM0NEODk3NjQKUldSa2w5ZzhYdWJSZG83ZnZHWUd0SlUxM0QyYzk4d1JoS09uTCs1Qkoyb0RVazY2SGRkK0tYQm4K",
+      "endpoints": [
+        "https://gitee.com/yu-shengming/qiu/raw/updater/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -22,24 +22,28 @@ class Fish {
   x = 0
   y = 0
   angle = 0
-  speed = 0
   tail = 0
-  tx = 0
-  ty = 0
-  spin = 0
-  spinDir: 1 | -1 = 1
-  orbitDir: 1 | -1 = Math.random() < 0.5 ? 1 : -1
 }
 
-/** 只负责壁纸、水景、鱼的自主游动和鼠标跟随。 */
+export interface FishFrame {
+  x: number
+  y: number
+  angle: number
+  tail: number
+}
+
+/** 只负责当前显示器的水景和共享鱼状态的渲染。 */
 export class WallpaperScene {
   private ctx: CanvasRenderingContext2D
   private w = 0
   private h = 0
   private t = 0
   private zoom = 1
+  private readonly fishZoom = 2.1
   private fish = new Fish()
-  private pointer = { x: 0, y: 0, at: -99, on: false }
+  private targetFish = new Fish()
+  private hasFish = false
+  private origin = { x: 0, y: 0 }
   private bubbles: Bubble[] = []
   private grass: {
     x: number
@@ -55,7 +59,13 @@ export class WallpaperScene {
   }
 
   get fishPos() {
-    return { x: this.fish.x, y: this.fish.y, r: 28 * this.zoom }
+    const margin = 140
+    const visible = this.hasFish
+      && this.fish.x > -margin
+      && this.fish.x < this.w + margin
+      && this.fish.y > -margin
+      && this.fish.y < this.h + margin
+    return { x: this.fish.x, y: this.fish.y, r: 28 * this.fishZoom, visible }
   }
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -77,12 +87,18 @@ export class WallpaperScene {
     if (!this.grass.length || Math.abs(this.w - this.seededAt) > 160) this.reseed()
   }
 
-  setPointer(x: number, y: number) {
-    this.pointer = { x, y, at: this.t, on: true }
+  setOrigin(x: number, y: number) {
+    this.origin = { x, y }
+    this.hasFish = false
   }
 
-  clearPointer() {
-    this.pointer.on = false
+  setFishFrame(frame: FishFrame) {
+    this.targetFish.x = frame.x - this.origin.x
+    this.targetFish.y = frame.y - this.origin.y
+    this.targetFish.angle = frame.angle
+    this.targetFish.tail = frame.tail
+    if (!this.hasFish) Object.assign(this.fish, this.targetFish)
+    this.hasFish = true
   }
 
   frame(dt: number) {
@@ -125,10 +141,6 @@ export class WallpaperScene {
         a: rand(0.06, 0.3),
         dark: Math.random() < 0.5,
       })
-
-    this.fish.x = this.w * 0.5
-    this.fish.y = this.h * 0.48
-    this.pickTarget()
   }
 
   private spawnBubble(x = rand(this.w * 0.08, this.w * 0.92), y = this.h + rand(0, 20)) {
@@ -141,11 +153,6 @@ export class WallpaperScene {
     })
   }
 
-  private pickTarget() {
-    this.fish.tx = rand(this.w * 0.12, this.w * 0.88)
-    this.fish.ty = rand(this.h * 0.14, this.floorY - 30)
-  }
-
   private update(dt: number) {
     if (Math.random() < dt * 1.2 * this.zoom) this.spawnBubble()
     for (const bubble of this.bubbles) {
@@ -154,73 +161,12 @@ export class WallpaperScene {
       bubble.x += Math.sin(bubble.phase) * 8 * dt
     }
     this.bubbles = this.bubbles.filter((bubble) => bubble.y > -12)
-    this.swim(dt)
-  }
-
-  private swim(dt: number) {
-    const fish = this.fish
-    let curious = false
-    if (this.pointer.on && this.t - this.pointer.at < 2.6) {
-      const px = this.pointer.x
-      const py = Math.min(this.pointer.y, this.floorY - 30)
-      const radius = 74 * this.zoom
-      const bearing = Math.atan2(fish.y - py, fish.x - px)
-      const ahead = bearing + fish.orbitDir * 0.8
-      fish.tx = px + Math.cos(ahead) * radius
-      fish.ty = py + Math.sin(ahead) * radius * 0.62
-      curious = true
-
-      if (Math.random() < dt * 0.06) fish.orbitDir = fish.orbitDir === 1 ? -1 : 1
-      if (Math.random() < dt * 0.35) this.spawnBubble(fish.x, fish.y - 8 * this.zoom)
-    }
-
-    const dx = fish.tx - fish.x
-    const dy = fish.ty - fish.y
-    if (!curious && Math.hypot(dx, dy) < 26) this.pickTarget()
-
-    const targetSpeed = (curious ? 78 : 58) * this.zoom
-    fish.speed = lerp(fish.speed, targetSpeed, Math.min(1, dt * 2.2))
-    const desired = Math.atan2(dy, dx)
-    fish.angle += wrapAngle(desired - fish.angle) * Math.min(1, dt * (curious ? 4.6 : 3.4))
-
-    if (!curious && fish.spin <= 0 && Math.random() < dt * 0.12) {
-      fish.spin = 1.1
-      fish.spinDir = Math.random() < 0.5 ? 1 : -1
-    }
-    if (fish.spin > 0) {
-      fish.spin -= dt
-      fish.angle += dt * 5.2 * fish.spinDir
-    }
-
-    fish.x += Math.cos(fish.angle) * fish.speed * dt
-    fish.y += Math.sin(fish.angle) * fish.speed * dt
-
-    const along = 92 * 0.8 * this.zoom
-    const across = 23 * 1.75 * this.zoom
-    const cos = Math.abs(Math.cos(fish.angle))
-    const sin = Math.abs(Math.sin(fish.angle))
-    const padX = Math.max(34, cos * along + sin * across)
-    const padY = Math.max(34, sin * along + cos * across)
-    const floor = this.floorY - padY
-
-    if (fish.y < padY || fish.y > floor) {
-      fish.y = Math.max(padY, Math.min(floor, fish.y))
-      if (!curious) this.pickTarget()
-    }
-
-    const outsideVisible = fish.x < padX || fish.x > this.w - padX
-    if (curious) {
-      const outside = 92 * 2 * this.zoom
-      if (fish.x < -outside || fish.x > this.w + outside) {
-        fish.x = Math.max(-outside, Math.min(this.w + outside, fish.x))
-        fish.orbitDir = fish.orbitDir === 1 ? -1 : 1
-      }
-    } else if (outsideVisible) {
-      fish.tx = fish.x < padX ? padX + along * 0.45 : this.w - padX - along * 0.45
-      fish.ty = Math.max(padY, Math.min(floor, fish.y))
-    }
-
-    fish.tail += dt * (2.6 + (fish.speed / 40) * 5)
+    if (!this.hasFish) return
+    const blend = 1 - Math.exp(-dt * 18)
+    this.fish.x = lerp(this.fish.x, this.targetFish.x, blend)
+    this.fish.y = lerp(this.fish.y, this.targetFish.y, blend)
+    this.fish.angle += wrapAngle(this.targetFish.angle - this.fish.angle) * blend
+    this.fish.tail = this.targetFish.tail
   }
 
   private draw() {
@@ -403,10 +349,11 @@ export class WallpaperScene {
   }
 
   private drawFish() {
+    if (!this.hasFish) return
     const { ctx } = this
     const fish = this.fish
-    const length = 92 * this.zoom
-    const height = 23 * this.zoom
+    const length = 92 * this.fishZoom
+    const height = 23 * this.fishZoom
     const wave = (u: number) => Math.sin(fish.tail - u * 2.7) * height * 0.34 * u * u
     const halfHeight = (u: number) =>
       u < 0.28
@@ -475,7 +422,7 @@ export class WallpaperScene {
     ctx.fillStyle = bodyGradient
     ctx.fill(body)
     ctx.strokeStyle = hsl(14, 60, 30, 0.58)
-    ctx.lineWidth = Math.max(0.8, 1.15 * this.zoom)
+    ctx.lineWidth = Math.max(0.8, 1.15 * this.fishZoom)
     ctx.stroke(body)
 
     ctx.save()
@@ -491,7 +438,7 @@ export class WallpaperScene {
     ctx.fill(body)
 
     ctx.strokeStyle = hsl(14, 58, 35, 0.14)
-    ctx.lineWidth = Math.max(0.55, 0.75 * this.zoom)
+    ctx.lineWidth = Math.max(0.55, 0.75 * this.fishZoom)
     for (let row = 0; row < 2; row++) {
       for (let u = 0.3 + row * 0.06; u < 0.87; u += 0.14) {
         const cy = py(u) + (row - 0.25) * height * 0.36
@@ -530,7 +477,7 @@ export class WallpaperScene {
 
     const eyeX = px(0.115)
     const eyeY = py(0.115) - height * 0.2
-    const eyeR = 4.35 * this.zoom
+    const eyeR = 4.35 * this.fishZoom
     ctx.fillStyle = hsl(14, 55, 42, 0.72)
     ctx.beginPath()
     ctx.arc(eyeX, eyeY, eyeR * 1.34, 0, TAU)

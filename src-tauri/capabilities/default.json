@@ -1,13 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "前端只读取壁纸窗口位置和系统光标；窗口铺设由 Rust 原生侧完成。",
+  "description": "前端只读取系统光标；窗口铺设由 Rust 原生侧完成。",
   "windows": [
-    "main"
+    "main",
+    "wallpaper-*"
   ],
   "permissions": [
     "core:default",
-    "core:window:allow-outer-position",
     "core:window:allow-cursor-position"
   ]
 }

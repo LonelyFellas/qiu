@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { listen } from '@tauri-apps/api/event'
 
-import { enterWallpaper, trackCursor } from './logic/desktop'
-import { WallpaperScene } from './tank/WallpaperScene'
+import { enterWallpaper, setWorldPointer, trackCursor } from './logic/desktop'
+import { WallpaperScene, type FishFrame } from './tank/WallpaperScene'
 
 const AMBIENT_LINES = [
   '你来啦',
@@ -40,7 +41,6 @@ export default function App() {
   const clearPointer = () => {
     window.clearTimeout(dwellTimer.current)
     pointerRef.current = { x: Number.NaN, y: Number.NaN }
-    sceneRef.current?.clearPointer()
     setSay('')
   }
 
@@ -49,10 +49,9 @@ export default function App() {
     if (!scene) return
     const pointer = { x, y }
     pointerRef.current = pointer
-    scene.setPointer(x, y)
     window.clearTimeout(dwellTimer.current)
 
-    if (distance(pointer, scene.fishPos) > 160) return
+    if (!scene.fishPos.visible || distance(pointer, scene.fishPos) > 160) return
     dwellTimer.current = window.setTimeout(() => {
       const latest = pointerRef.current
       if (!Number.isFinite(latest.x)) return
@@ -81,10 +80,10 @@ export default function App() {
 
       const bubble = bubbleRef.current
       if (bubble) {
-        const { x, y, r } = scene.fishPos
+        const { x, y, r, visible } = scene.fishPos
         const bubbleX = Math.max(118, Math.min(canvas.clientWidth - 118, x))
         const bubbleY = Math.max(58, y - r - 12)
-        bubble.style.visibility = x < 118 || x > canvas.clientWidth - 118
+        bubble.style.visibility = !visible || x < 118 || x > canvas.clientWidth - 118
           ? 'hidden'
           : 'visible'
         bubble.style.transform = `translate(${bubbleX}px, ${bubbleY}px) translate(-50%, -100%)`
@@ -104,13 +103,31 @@ export default function App() {
     if (!('__TAURI_INTERNALS__' in window)) return
     let alive = true
     let stopTracking = () => {}
-    void enterWallpaper().then((ready) => {
-      if (!alive || !ready) return
-      stopTracking = trackCursor(followPointer, clearPointer)
-    })
+    let stopListening = () => {}
+    void (async () => {
+      const screen = await enterWallpaper()
+      if (!alive || !screen) return
+      sceneRef.current?.setOrigin(screen.x, screen.y)
+      stopListening = await listen<FishFrame>('fish-frame', (event) => {
+        sceneRef.current?.setFishFrame(event.payload)
+      })
+      if (!alive) {
+        stopListening()
+        return
+      }
+      stopTracking = trackCursor(
+        screen,
+        (x, y) => {
+          setWorldPointer(screen.x + x, screen.y + y)
+          followPointer(x, y)
+        },
+        clearPointer,
+      )
+    })()
     return () => {
       alive = false
       stopTracking()
+      stopListening()
     }
   }, [])
 
@@ -123,11 +140,6 @@ export default function App() {
     <main className="wallpaper">
       <canvas
         ref={canvasRef}
-        onMouseMove={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect()
-          followPointer(event.clientX - rect.left, event.clientY - rect.top)
-        }}
-        onMouseLeave={clearPointer}
       />
       <div ref={bubbleRef} className={`say ${say ? 'on' : ''}`}>
         {say}
