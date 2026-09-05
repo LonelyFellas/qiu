@@ -87,19 +87,42 @@ struct RenderControl {
     surface_count: usize,
 }
 
+struct Recovery {
+    enabled: AtomicBool,
+    windows: Vec<Arc<Window>>,
+    screens: Vec<ScreenConfig>,
+}
+
 pub fn start(windows: Vec<(Window, ScreenConfig)>, app: AppHandle) -> Result<(), String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let windows = windows
+        .into_iter()
+        .map(|(window, screen)| (Arc::new(window), screen))
+        .collect::<Vec<_>>();
+    let cleanup_windows = windows
+        .iter()
+        .map(|(window, _)| window.clone())
+        .collect::<Vec<_>>();
+    let recovery_screens = windows.iter().map(|(_, screen)| screen.clone()).collect();
     let surfaces = windows
         .into_iter()
         .map(|(window, screen)| {
-            let window = Arc::new(window);
             let size = window.inner_size().map_err(|error| error.to_string())?;
             let surface = instance
                 .create_surface(window.clone())
                 .map_err(|error| error.to_string())?;
             Ok((window, surface, size, screen))
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, String>>();
+    let surfaces = match surfaces {
+        Ok(surfaces) => surfaces,
+        Err(error) => {
+            for window in &cleanup_windows {
+                let _ = window.close();
+            }
+            return Err(error);
+        }
+    };
     let physical_screens = surfaces
         .iter()
         .map(|(_, _, _, screen)| {
@@ -116,18 +139,20 @@ pub fn start(windows: Vec<(Window, ScreenConfig)>, app: AppHandle) -> Result<(),
         fish.lock().map_err(|_| "fish lock poisoned")?.tick(0.0),
     ));
     let running = Arc::new(AtomicBool::new(true));
-    let cleanup_windows = surfaces
-        .iter()
-        .map(|(window, _, _, _)| window.clone())
-        .collect::<Vec<_>>();
+    let recovery = Arc::new(Recovery {
+        enabled: AtomicBool::new(false),
+        windows: cleanup_windows,
+        screens: recovery_screens,
+    });
     let presented = Arc::new(AtomicUsize::new(0));
-    let surface_count = cleanup_windows.len();
+    let surface_count = recovery.windows.len();
     for surface in surfaces {
         let instance = instance.clone();
         let frame = frame.clone();
         let render_app = app.clone();
         let render_running = running.clone();
         let render_presented = presented.clone();
+        let render_recovery = recovery.clone();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let error_tx = ready_tx.clone();
         thread::spawn(move || {
@@ -136,16 +161,30 @@ pub fn start(windows: Vec<(Window, ScreenConfig)>, app: AppHandle) -> Result<(),
                 vec![surface],
                 frame,
                 RenderControl {
-                    app: render_app,
+                    app: render_app.clone(),
                     ready: ready_tx,
                     running: render_running.clone(),
                     presented: render_presented,
                     surface_count,
                 },
             )) {
-                render_running.store(false, Ordering::Release);
+                let was_running = render_running.swap(false, Ordering::SeqCst);
                 let _ = error_tx.send(Err(error.clone()));
                 eprintln!("native-gpu=failed: {error}");
+                if was_running && render_recovery.enabled.load(Ordering::SeqCst) {
+                    let recovery_app = render_app.clone();
+                    let recovery = render_recovery.clone();
+                    let _ = render_app.run_on_main_thread(move || {
+                        for window in &recovery.windows {
+                            let _ = window.close();
+                        }
+                        if let Err(error) =
+                            crate::start_webview_renderer(&recovery_app, &recovery.screens)
+                        {
+                            eprintln!("webview-fallback=failed: {error}");
+                        }
+                    });
+                }
             }
         });
         let ready = ready_rx
@@ -154,11 +193,18 @@ pub fn start(windows: Vec<(Window, ScreenConfig)>, app: AppHandle) -> Result<(),
             .and_then(|result| result);
         if let Err(error) = ready {
             running.store(false, Ordering::Release);
-            for window in &cleanup_windows {
+            for window in &recovery.windows {
                 let _ = window.close();
             }
             return Err(error);
         }
+    }
+    recovery.enabled.store(true, Ordering::SeqCst);
+    if !running.load(Ordering::SeqCst) {
+        for window in &recovery.windows {
+            let _ = window.close();
+        }
+        return Err("native renderer failed during initialization".into());
     }
     let pointer_fish = fish.clone();
     let pointer_app = app.clone();

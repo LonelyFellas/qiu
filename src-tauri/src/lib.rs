@@ -443,6 +443,29 @@ fn start_fish_loop(app: tauri::AppHandle) {
     });
 }
 
+pub(crate) fn start_webview_renderer(
+    app: &tauri::AppHandle,
+    screens: &[ScreenConfig],
+) -> Result<(), String> {
+    for screen in screens {
+        if app.get_webview_window(&screen.label).is_some() {
+            continue;
+        }
+        WebviewWindowBuilder::new(app, &screen.label, WebviewUrl::App("index.html".into()))
+            .title("小鱼缸壁纸")
+            .visible(false)
+            .focused(false)
+            .focusable(false)
+            .decorations(false)
+            .transparent(false)
+            .resizable(false)
+            .build()
+            .map_err(|error| error.to_string())?;
+    }
+    start_fish_loop(app.clone());
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -545,22 +568,11 @@ pub fn run() {
                 }
             }
             if use_webview {
-                for screen in screens.iter().skip(1) {
-                    WebviewWindowBuilder::new(
-                        app,
-                        &screen.config.label,
-                        WebviewUrl::App("index.html".into()),
-                    )
-                    .title("小鱼缸壁纸")
-                    .visible(false)
-                    .focused(false)
-                    .focusable(false)
-                    .decorations(false)
-                    .transparent(false)
-                    .resizable(false)
-                    .build()?;
-                }
-                start_fish_loop(app.handle().clone());
+                let webview_screens = screens
+                    .iter()
+                    .map(|screen| screen.config.clone())
+                    .collect::<Vec<_>>();
+                start_webview_renderer(app.handle(), &webview_screens)?;
             }
 
             #[cfg(desktop)]
