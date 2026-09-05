@@ -94,7 +94,7 @@ elif [[ "$current_status" != "404" ]]; then
 fi
 
 git remote add gitee "$auth_url"
-git fetch origin main --tags
+git fetch --no-tags origin main
 git push gitee refs/remotes/origin/main:refs/heads/main
 git push gitee "refs/tags/${RELEASE_TAG}"
 
