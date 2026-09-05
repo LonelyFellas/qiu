@@ -260,13 +260,14 @@ fn apply_native_wallpaper_level(
     screen: &ScreenConfig,
 ) -> Result<(), String> {
     use std::{ffi::c_void, ptr};
+    use windows_sys::core::BOOL;
     use windows_sys::Win32::{
-        Foundation::{GetLastError, SetLastError, BOOL, HWND, LPARAM, POINT},
+        Foundation::{GetLastError, SetLastError, HWND, LPARAM, POINT},
+        Graphics::Gdi::ScreenToClient,
         UI::WindowsAndMessaging::{
-            EnumWindows, FindWindowExW, FindWindowW, GetWindowLongPtrW, ScreenToClient,
-            SendMessageTimeoutW, SetParent, SetWindowLongPtrW, SetWindowPos, GWL_STYLE,
-            SMTO_NORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_CHILD,
-            WS_POPUP,
+            EnumWindows, FindWindowExW, FindWindowW, GetWindowLongPtrW, SendMessageTimeoutW,
+            SetParent, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SMTO_NORMAL, SWP_FRAMECHANGED,
+            SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_CHILD, WS_POPUP,
         },
     };
 
