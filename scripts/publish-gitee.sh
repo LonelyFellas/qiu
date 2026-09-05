@@ -102,7 +102,7 @@ release_file="$(mktemp)"
 status="$(curl --silent --show-error --output "$release_file" --write-out '%{http_code}' \
   --header "Authorization: Bearer ${GITEE_TOKEN}" \
   "${api}/releases/tags/${RELEASE_TAG}")"
-if [[ "$status" == "404" ]]; then
+if [[ "$status" == "404" || ( "$status" == "200" && "$(jq -r 'type' "$release_file")" == "null" ) ]]; then
   release_body="$(jq -cn \
     --arg tag "$RELEASE_TAG" \
     '{tag_name: $tag, name: ("小鱼缸 " + $tag), body: "国内安装包与自动更新文件。", target_commitish: "main", prerelease: false}')"
