@@ -8,6 +8,8 @@ use tauri::{
 };
 use tauri_plugin_updater::UpdaterExt;
 
+mod native_gpu;
+
 #[derive(Default)]
 struct UpdateMenuState {
     checking: bool,
@@ -15,13 +17,13 @@ struct UpdateMenuState {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ScreenConfig {
+pub(crate) struct ScreenConfig {
     label: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    scale_factor: f64,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+    pub(crate) scale_factor: f64,
     primary_scale_factor: f64,
 }
 
@@ -30,18 +32,18 @@ struct ScreenTarget {
     config: ScreenConfig,
 }
 
-struct WallpaperState {
+pub(crate) struct WallpaperState {
     screens: Vec<ScreenTarget>,
-    fish: Mutex<FishWorld>,
+    pub(crate) fish: Mutex<FishWorld>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FishFrame {
-    x: f64,
-    y: f64,
-    angle: f64,
-    tail: f64,
+pub(crate) struct FishFrame {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) angle: f64,
+    pub(crate) tail: f64,
 }
 
 #[derive(Clone, Serialize)]
@@ -56,7 +58,7 @@ struct PointerTarget {
     updated_at: Instant,
 }
 
-struct FishWorld {
+pub(crate) struct FishWorld {
     x: f64,
     y: f64,
     target_x: f64,
@@ -92,7 +94,7 @@ impl FishWorld {
         world
     }
 
-    fn set_pointer(&mut self, x: f64, y: f64) {
+    pub(crate) fn set_pointer(&mut self, x: f64, y: f64) {
         self.pointer = Some(PointerTarget {
             x,
             y,
@@ -100,7 +102,7 @@ impl FishWorld {
         });
     }
 
-    fn tick(&mut self, dt: f64) -> FishFrame {
+    pub(crate) fn tick(&mut self, dt: f64) -> FishFrame {
         let pointer = self
             .pointer
             .as_ref()
@@ -235,6 +237,127 @@ fn apply_wallpaper_level(window: &tauri::WebviewWindow) -> Result<String, String
         let _ = window;
         Ok("using always-on-bottom".into())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_native_wallpaper_level(
+    window: &tauri::Window,
+    _screen: &ScreenConfig,
+) -> Result<(), String> {
+    use objc2::runtime::AnyObject;
+    let ptr = window.ns_window().map_err(|error| error.to_string())? as *mut AnyObject;
+    let behavior: usize = 1 | 16 | 64;
+    unsafe {
+        let _: () = objc2::msg_send![ptr, setLevel: DESKTOP_LEVEL];
+        let _: () = objc2::msg_send![ptr, setCollectionBehavior: behavior];
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn apply_native_wallpaper_level(
+    window: &tauri::Window,
+    screen: &ScreenConfig,
+) -> Result<(), String> {
+    use std::{ffi::c_void, ptr};
+    use windows_sys::Win32::{
+        Foundation::{GetLastError, SetLastError, BOOL, HWND, LPARAM, POINT},
+        UI::WindowsAndMessaging::{
+            EnumWindows, FindWindowExW, FindWindowW, GetWindowLongPtrW, ScreenToClient,
+            SendMessageTimeoutW, SetParent, SetWindowLongPtrW, SetWindowPos, GWL_STYLE,
+            SMTO_NORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_CHILD,
+            WS_POPUP,
+        },
+    };
+
+    const SPAWN_WORKER: u32 = 0x052c;
+    const PROGMAN: &[u16] = &[80, 114, 111, 103, 109, 97, 110, 0];
+    const WORKER_W: &[u16] = &[87, 111, 114, 107, 101, 114, 87, 0];
+    const SHELL_VIEW: &[u16] = &[
+        83, 72, 69, 76, 76, 68, 76, 76, 95, 68, 101, 102, 86, 105, 101, 119, 0,
+    ];
+
+    unsafe extern "system" fn find_worker(window: HWND, target: LPARAM) -> BOOL {
+        let shell_view = FindWindowExW(window, ptr::null_mut(), SHELL_VIEW.as_ptr(), ptr::null());
+        if !shell_view.is_null() {
+            let worker = FindWindowExW(ptr::null_mut(), window, WORKER_W.as_ptr(), ptr::null());
+            if !worker.is_null() {
+                *(target as *mut HWND) = worker;
+                return 0;
+            }
+        }
+        1
+    }
+
+    unsafe {
+        let progman = FindWindowW(PROGMAN.as_ptr(), ptr::null());
+        if progman.is_null() {
+            return Err("Windows Progman window not found".into());
+        }
+        let mut ignored = 0;
+        SendMessageTimeoutW(progman, SPAWN_WORKER, 0, 0, SMTO_NORMAL, 1000, &mut ignored);
+        let mut worker: HWND = ptr::null_mut::<c_void>();
+        EnumWindows(Some(find_worker), &mut worker as *mut HWND as LPARAM);
+        if worker.is_null() {
+            return Err("Windows WorkerW wallpaper window not found".into());
+        }
+        let child = window.hwnd().map_err(|error| error.to_string())?.0;
+        let style = GetWindowLongPtrW(child, GWL_STYLE) as u32;
+        SetLastError(0);
+        if SetWindowLongPtrW(child, GWL_STYLE, ((style & !WS_POPUP) | WS_CHILD) as isize) == 0 {
+            let error = GetLastError();
+            if error != 0 {
+                return Err(format!("failed to set WorkerW child style: {error}"));
+            }
+        }
+        SetLastError(0);
+        if SetParent(child, worker).is_null() {
+            let error = GetLastError();
+            if error != 0 {
+                return Err(format!(
+                    "failed to attach native window to WorkerW: {error}"
+                ));
+            }
+        }
+        let mut origin = POINT {
+            x: (screen.x * screen.scale_factor).round() as i32,
+            y: (screen.y * screen.scale_factor).round() as i32,
+        };
+        if ScreenToClient(worker, &mut origin) == 0 {
+            return Err(format!(
+                "failed to convert WorkerW coordinates: {}",
+                GetLastError()
+            ));
+        }
+        let width = (screen.width * screen.scale_factor).round() as i32;
+        let height = (screen.height * screen.scale_factor).round() as i32;
+        if SetWindowPos(
+            child,
+            ptr::null_mut(),
+            origin.x,
+            origin.y,
+            width,
+            height,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+        ) == 0
+        {
+            return Err(format!(
+                "failed to place WorkerW child window: {}",
+                GetLastError()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn apply_native_wallpaper_level(
+    window: &tauri::Window,
+    _screen: &ScreenConfig,
+) -> Result<(), String> {
+    window
+        .set_always_on_bottom(true)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -381,22 +504,64 @@ pub fn run() {
                 fish: Mutex::new(FishWorld::new(fish_screens)),
             });
 
-            for screen in screens.iter().skip(1) {
-                WebviewWindowBuilder::new(
-                    app,
-                    &screen.config.label,
-                    WebviewUrl::App("index.html".into()),
-                )
-                .title("小鱼缸壁纸")
-                .visible(false)
-                .focused(false)
-                .focusable(false)
-                .decorations(false)
-                .transparent(false)
-                .resizable(false)
-                .build()?;
+            let mut use_webview = std::env::var_os("QIU_WEBVIEW_RENDERER").is_some();
+            if !use_webview {
+                let native_result = (|| -> Result<(), String> {
+                    let mut native_windows: Vec<(tauri::Window, ScreenConfig)> =
+                        Vec::with_capacity(screens.len());
+                    for (index, screen) in screens.iter().enumerate() {
+                        let window =
+                            tauri::window::WindowBuilder::new(app, format!("native-{index}"))
+                                .title("小鱼缸壁纸")
+                                .position(screen.config.x, screen.config.y)
+                                .inner_size(screen.config.width, screen.config.height)
+                                .visible(false)
+                                .focused(false)
+                                .focusable(false)
+                                .decorations(false)
+                                .transparent(false)
+                                .resizable(false)
+                                .build()
+                                .map_err(|error| error.to_string())?;
+                        let configured = window
+                            .set_ignore_cursor_events(true)
+                            .and_then(|_| window.show())
+                            .map_err(|error| error.to_string())
+                            .and_then(|_| apply_native_wallpaper_level(&window, &screen.config));
+                        if let Err(error) = configured {
+                            let _ = window.close();
+                            for (window, _) in &native_windows {
+                                let _ = window.close();
+                            }
+                            return Err(error);
+                        }
+                        native_windows.push((window, screen.config.clone()));
+                    }
+                    native_gpu::start(native_windows, app.handle().clone())
+                })();
+                if let Err(error) = native_result {
+                    eprintln!("native-gpu=fallback: {error}");
+                    use_webview = true;
+                }
             }
-            start_fish_loop(app.handle().clone());
+            if use_webview {
+                for screen in screens.iter().skip(1) {
+                    WebviewWindowBuilder::new(
+                        app,
+                        &screen.config.label,
+                        WebviewUrl::App("index.html".into()),
+                    )
+                    .title("小鱼缸壁纸")
+                    .visible(false)
+                    .focused(false)
+                    .focusable(false)
+                    .decorations(false)
+                    .transparent(false)
+                    .resizable(false)
+                    .build()?;
+                }
+                start_fish_loop(app.handle().clone());
+            }
 
             #[cfg(desktop)]
             {
