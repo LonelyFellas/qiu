@@ -24,7 +24,7 @@ tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-pn
 tauri-plugin-updater = "2"
 pollster = "0.4"
 bytemuck = "1"
-wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal", "dx12"] }
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal", "gles"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-autostart = "2"
